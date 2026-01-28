@@ -123,4 +123,5 @@ export interface GameState {
   particles: Particle[];
   shakeIntensity: number;
   damageFlash: number; // Opacity 0-1
+  timeOfDay: number; // 0 to 24
 }

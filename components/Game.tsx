@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { Environment, Sky, Stars, ContactShadows } from '@react-three/drei';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Environment, Sky, Stars, ContactShadows, OrbitControls } from '@react-three/drei';
+import * as THREE from 'three';
 import { generateWorld } from '../utils/generation';
 import { findPath } from '../utils/pathfinding';
 import { GameState, Position, TileType, ItemType, Enemy, Recipe, Particle } from '../types';
@@ -12,7 +13,29 @@ import { QuestLog } from './QuestLog';
 import { CraftingUI } from './CraftingUI';
 import { Effects } from './Effects';
 import { soundManager } from '../utils/SoundManager';
-import { MousePointer2, RefreshCw, Heart, Skull, Volume2 } from 'lucide-react';
+import { MousePointer2, RefreshCw, Heart, Skull, Volume2, Moon, Sun } from 'lucide-react';
+
+// --- Camera Controller Component ---
+const CameraFollower: React.FC<{ target: React.RefObject<THREE.Group> }> = ({ target }) => {
+  const { camera, controls } = useThree();
+  const vec = useMemo(() => new THREE.Vector3(), []);
+
+  useFrame(() => {
+    if (target.current && controls) {
+       const playerPos = target.current.position;
+       
+       // Update the OrbitControls target to always look at the player
+       // We use lerp for smooth following
+       // @ts-ignore - orbit controls ref type inference
+       const ctrl = controls as any;
+       
+       ctrl.target.lerp(playerPos, 0.1);
+       ctrl.update();
+    }
+  });
+  
+  return null;
+};
 
 export const Game: React.FC = () => {
   // --- Game State ---
@@ -39,6 +62,7 @@ export const Game: React.FC = () => {
       particles: [],
       shakeIntensity: 0,
       damageFlash: 0,
+      timeOfDay: 12, // Start at noon
       quests: [
         { 
           id: 'q1', 
@@ -65,8 +89,9 @@ export const Game: React.FC = () => {
   });
 
   const lastFrameTime = useRef(Date.now());
+  const playerRef = useRef<THREE.Group>(null);
 
-  // --- Game Loop (Physics, AI, Particles) ---
+  // --- Game Loop (Physics, AI, Particles, Time) ---
   useEffect(() => {
     let animationFrameId: number;
 
@@ -79,26 +104,24 @@ export const Game: React.FC = () => {
         // 1. Particle Physics
         let newParticles = prev.particles.map(p => ({
             ...p,
-            x: p.x + p.vx * delta * 5, // Speed up visual
+            x: p.x + p.vx * delta * 5, 
             y: p.y + p.vy * delta * 5,
             z: p.z + p.vz * delta * 5,
-            vy: p.vy - 10 * delta, // Gravity
-            life: p.life - delta, // Decay
+            vy: p.vy - 10 * delta,
+            life: p.life - delta,
         })).filter(p => p.life > 0 && p.y > -0.5);
 
-        // 2. Shake Decay
+        // 2. Effect Decays
         const newShake = Math.max(0, prev.shakeIntensity - delta * 5);
-        
-        // 3. Damage Flash Decay
         const newFlash = Math.max(0, prev.damageFlash - delta * 2);
 
-        // 4. Enemy Logic (Run less frequently ideally, but okay for now)
-        // We'll move the heavy AI logic here from the interval to sync everything if we wanted smoothness,
-        // but let's keep the interval for AI ticks to avoid overloading render loop state updates.
-        // However, we MUST return something if we want to update particles/shake frame-by-frame.
-        
-        if (newParticles.length !== prev.particles.length || prev.shakeIntensity !== newShake || prev.damageFlash !== newFlash) {
-             return { ...prev, particles: newParticles, shakeIntensity: newShake, damageFlash: newFlash };
+        // 3. Time Cycle (24 game hours = 2 minutes real time approx)
+        // delta is seconds. 24 hours in 120 seconds -> 0.2 hours per second
+        let newTime = prev.timeOfDay + (delta * 0.2);
+        if (newTime >= 24) newTime = 0;
+
+        if (newParticles.length !== prev.particles.length || prev.shakeIntensity !== newShake || prev.damageFlash !== newFlash || Math.floor(prev.timeOfDay) !== Math.floor(newTime)) {
+             return { ...prev, particles: newParticles, shakeIntensity: newShake, damageFlash: newFlash, timeOfDay: newTime };
         }
         return prev;
       });
@@ -126,13 +149,11 @@ export const Game: React.FC = () => {
           const dist = Math.abs(enemy.position.x - prev.playerPos.x) + Math.abs(enemy.position.z - prev.playerPos.z);
           
           if (dist === 1) {
-            // Attack Player
             newPlayerHp = Math.max(0, newPlayerHp - enemy.attack);
             tookDamage = true;
             soundManager.play('hit');
             return enemy;
           } else if (dist <= ENEMY_AGGRO_RANGE) {
-            // Move logic...
             let dx = 0;
             let dz = 0;
             if (enemy.position.x < prev.playerPos.x) dx = 1;
@@ -150,10 +171,8 @@ export const Game: React.FC = () => {
           return enemy;
         });
 
-        // Effect Triggers for damage
         let shake = prev.shakeIntensity;
         let flash = prev.damageFlash;
-        
         if (tookDamage) {
             shake = 1.0;
             flash = 0.5;
@@ -195,38 +214,28 @@ export const Game: React.FC = () => {
       const newEnemies = prev.enemies.map(e => ({...e}));
       const newQuests = [...prev.quests];
       let addedParticles: Particle[] = [];
-      
       let itemType: ItemType | null = null;
 
-      // Combat Interaction
       if (prev.combatTargetId) {
         const enemyIndex = newEnemies.findIndex(e => e.id === prev.combatTargetId);
         if (enemyIndex > -1 && !newEnemies[enemyIndex].dead) {
              const dmg = PLAYER_BASE_ATTACK + (prev.inventory.some(i => i.type === ItemType.SWORD) ? SWORD_BONUS_ATTACK : 0);
              newEnemies[enemyIndex].hp -= dmg;
              soundManager.play('hit');
-             
-             // Hit Particles
              addedParticles = spawnParticles(newEnemies[enemyIndex].position.x, newEnemies[enemyIndex].position.z, '#ffffff', 5);
 
              if (newEnemies[enemyIndex].hp <= 0) {
                  newEnemies[enemyIndex].dead = true;
                  soundManager.play('collect'); 
-                 
-                 // Death Particles
                  addedParticles = [...addedParticles, ...spawnParticles(newEnemies[enemyIndex].position.x, newEnemies[enemyIndex].position.z, '#db2777', 15)];
-
-                 // Drop Loot
                  const lootRoll = Math.random();
                  const lootType = lootRoll > 0.5 ? ItemType.GOLD : (lootRoll > 0.2 ? ItemType.POTION : ItemType.GEM);
-                 
                  newItems.push({
                     id: `loot-${Date.now()}`,
                     type: lootType,
                     position: { x: newEnemies[enemyIndex].position.x, z: newEnemies[enemyIndex].position.z },
                     collected: false
                  });
-
                  newQuests.forEach(q => {
                     if (!q.completed && q.type === 'KILL' && q.targetType === 'ENEMY') {
                         q.currentCount++;
@@ -251,7 +260,6 @@ export const Game: React.FC = () => {
             soundManager.play('hit');
             addedParticles = spawnParticles(targetX, targetZ, '#78716c', 5);
         }
-
         if (itemType) {
             newItems.push({
             id: `spawn-${Date.now()}`,
@@ -323,7 +331,8 @@ export const Game: React.FC = () => {
       questLogOpen: false,
       particles: [],
       shakeIntensity: 0,
-      damageFlash: 0
+      damageFlash: 0,
+      timeOfDay: 12
     }));
   }, []);
 
@@ -411,7 +420,6 @@ export const Game: React.FC = () => {
         const item = prev.items[itemIndex];
         const newItems = [...prev.items];
         newItems[itemIndex] = { ...item, collected: true };
-        
         soundManager.play('collect');
 
         if (item.type === ItemType.POTION) {
@@ -491,6 +499,18 @@ export const Game: React.FC = () => {
     return gameState.grid.flatMap(row => row);
   }, [gameState.grid]);
 
+  // Derived Environment State
+  const sunPosition = useMemo(() => {
+    const angle = (gameState.timeOfDay / 24) * Math.PI * 2 - Math.PI / 2;
+    const y = Math.sin(angle) * 100;
+    const x = Math.cos(angle) * 100;
+    return [x, y, 0] as [number, number, number];
+  }, [gameState.timeOfDay]);
+
+  const isNight = gameState.timeOfDay < 6 || gameState.timeOfDay > 18;
+  const ambientIntensity = isNight ? 0.1 : 0.5;
+  const dirLightIntensity = isNight ? 0.2 : 1.5;
+
   return (
     <div 
       className="w-full h-full relative" 
@@ -509,13 +529,10 @@ export const Game: React.FC = () => {
       <div className={`absolute top-10 left-1/2 transform -translate-x-1/2 bg-black/70 text-white px-6 py-4 rounded-xl backdrop-blur-md transition-opacity duration-500 z-10 text-center max-w-md pointer-events-none select-none ${gameState.interactionCount > 0 ? 'opacity-0' : 'opacity-100'}`}>
         <h1 className="text-2xl font-bold mb-2 text-yellow-400">Procedural Town</h1>
         <p className="text-sm text-gray-300">
-          Click to Move. Click Enemies to Attack.<br/>
-          Collect Sword for +Damage, Potions for HP.<br/>
-          Explore the {gameState.biome} biome.
+          Tap/Swipe to Rotate Camera.<br/>
+          Tap Ground to Move.<br/>
+          Explore the {gameState.biome}.
         </p>
-        <div className="mt-3 flex items-center justify-center gap-2 text-xs text-blue-300 animate-pulse">
-           <Volume2 size={16} /> Audio Enabled
-        </div>
       </div>
 
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-slate-900/80 p-2 rounded-lg border border-slate-700">
@@ -527,6 +544,11 @@ export const Game: React.FC = () => {
             />
         </div>
         <span className="text-xs font-mono text-white">{gameState.playerHp}/{gameState.playerMaxHp}</span>
+      </div>
+
+      <div className="absolute top-4 left-4 z-30 bg-slate-900/80 p-2 rounded-lg border border-slate-700 text-white flex items-center gap-2">
+         {isNight ? <Moon size={16} className="text-blue-300" /> : <Sun size={16} className="text-yellow-400" />}
+         <span className="text-xs font-mono">{Math.floor(gameState.timeOfDay).toString().padStart(2, '0')}:00</span>
       </div>
 
       {gameState.playerHp <= 0 && (
@@ -569,17 +591,16 @@ export const Game: React.FC = () => {
       </button>
 
       <div className="absolute bottom-4 left-4 z-10 text-white/50 text-xs font-mono pointer-events-none">
-        Coords: [{gameState.playerPos.x}, {gameState.playerPos.z}] | 
-        Biome: {gameState.biome}
+        [{gameState.playerPos.x}, {gameState.playerPos.z}] | {gameState.biome}
       </div>
 
       <Canvas shadows dpr={[1, 2]}>
-        <Sky sunPosition={[100, 20, 100]} />
+        <Sky sunPosition={sunPosition} />
         <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
-        <ambientLight intensity={0.4} color="#b0c4de" />
+        <ambientLight intensity={ambientIntensity} color="#b0c4de" />
         <directionalLight 
-          position={[GRID_SIZE/2, 60, GRID_SIZE/2]} 
-          intensity={1.5} 
+          position={[sunPosition[0], sunPosition[1], 20]} 
+          intensity={dirLightIntensity} 
           castShadow 
           shadow-mapSize={[2048, 2048]} 
           shadow-camera-left={-GRID_SIZE/2}
@@ -588,6 +609,17 @@ export const Game: React.FC = () => {
           shadow-camera-bottom={-GRID_SIZE/2}
         />
         
+        {/* Camera Controls */}
+        <OrbitControls 
+            makeDefault 
+            enablePan={false} 
+            minPolarAngle={0} 
+            maxPolarAngle={Math.PI / 2.2} 
+            minDistance={5}
+            maxDistance={20}
+        />
+        <CameraFollower target={playerRef} />
+
         {/* Effects (Particles & Shake) */}
         <Effects particles={gameState.particles} shakeIntensity={gameState.shakeIntensity} />
 
@@ -634,6 +666,7 @@ export const Game: React.FC = () => {
 
           {gameState.playerHp > 0 && (
             <Player 
+                innerRef={playerRef}
                 position={gameState.playerPos} 
                 path={gameState.path} 
                 onMoveComplete={handleMoveComplete}

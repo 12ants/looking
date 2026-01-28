@@ -1,7 +1,7 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
+import React, { useRef, useEffect, useImperativeHandle } from 'react';
+import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { Position, WorldItem } from '../types';
+import { Position } from '../types';
 import { soundManager } from '../utils/SoundManager';
 
 interface PlayerProps {
@@ -10,11 +10,12 @@ interface PlayerProps {
   onMoveComplete: () => void;
   onPositionUpdate: (pos: Position) => void;
   onItemCollect: (pos: Position) => void;
+  // Expose ref to parent
+  innerRef?: React.Ref<THREE.Group>;
 }
 
-export const Player: React.FC<PlayerProps> = ({ position, path, onMoveComplete, onPositionUpdate, onItemCollect }) => {
+export const Player: React.FC<PlayerProps> = ({ position, path, onMoveComplete, onPositionUpdate, onItemCollect, innerRef }) => {
   const meshRef = useRef<THREE.Group>(null);
-  const { camera } = useThree();
   const speed = 5; // Units per second
 
   // Ref to store current actual vector position to avoid jitter from state updates
@@ -25,6 +26,9 @@ export const Player: React.FC<PlayerProps> = ({ position, path, onMoveComplete, 
   
   // Sound throttling
   const lastStepTime = useRef(0);
+
+  // Expose the mesh ref to parent
+  useImperativeHandle(innerRef, () => meshRef.current as THREE.Group);
 
   useEffect(() => {
     // When path changes, reset index (path[0] is current pos usually, so start moving to path[1])
@@ -78,27 +82,6 @@ export const Player: React.FC<PlayerProps> = ({ position, path, onMoveComplete, 
     meshRef.current.position.copy(currentPosRef.current);
     // Bobbing animation
     meshRef.current.position.y = 0.5 + Math.sin(state.clock.elapsedTime * 10) * 0.1;
-
-    // --- Third Person Camera Logic ---
-    
-    // Get player's forward direction
-    const forward = new THREE.Vector3(0, 0, 1);
-    forward.applyQuaternion(meshRef.current.quaternion);
-    forward.normalize();
-
-    // Calculate ideal camera position (behind and slightly up)
-    // - forward * 3 (3 units behind)
-    // + up * 2.5 (2.5 units up)
-    const cameraOffset = forward.clone().multiplyScalar(-4).add(new THREE.Vector3(0, 3, 0));
-    const desiredCamPos = currentPosRef.current.clone().add(cameraOffset);
-
-    // Smoothly interpolate camera position
-    // Lower alpha (0.05) creates a "heavier", smoother camera that trails slightly
-    camera.position.lerp(desiredCamPos, 0.08);
-
-    // Look slightly above the player's head
-    const lookTarget = currentPosRef.current.clone().add(new THREE.Vector3(0, 1.5, 0));
-    camera.lookAt(lookTarget);
   });
 
   return (
