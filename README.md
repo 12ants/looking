@@ -1,6 +1,8 @@
 <div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/12ants/looking/blob/main/looking.jpg?raw=true/>
+<img width="1200" height="475" alt="looking screenshot" src="https://raw.githubusercontent.com/12ants/looking/main/looking.jpg">
 </div>
+
+
 This contains everything you need to run your app locally.
 
 https://ai.studio/apps/drive/1egkzhjqYqQ7Az9Ep8YjlkFVdOzcaJLoP
