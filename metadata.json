@@ -1,0 +1,5 @@
+{
+  "name": "looking",
+  "description": "A 3D procedural town exploration game with pathfinding, inventory management, and resource gathering. Features a dynamically generated world, point-and-click movement, and responsive UI.",
+  "requestFramePermissions": []
+}
