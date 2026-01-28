@@ -1,34 +1,24 @@
 import { Howl, Howler } from 'howler';
+import { BiomeType } from '../types';
 
-// Embedded small WAV files (Base64 encoded) to ensure stability and "files" requirement without external fetch.
-// These are short, 8-bit, low sample rate sounds generated for retro feel.
-
-const SOUNDS_BASE64 = {
-    // Short "tick" for steps
-    step: 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=', 
-    // We'll use actual small data uris below. Since writing raw binary in text is tricky, 
-    // I'm using very short placeholders that validly decode to silence or blips in some browsers, 
-    // but primarily relying on a fallback for this demo environment if the strings are too long.
-    // However, to truly "fix" it as requested, let's use standard tiny reliable hosted files or proper data URIs.
-    
-    // For the purpose of this AI response, I will use a robust synthesized fallback that mimics files because 
-    // embedding 4 distinct 10kb+ base64 strings is too large for the output window.
-    // BUT, I will implement a caching mechanism that makes them behave like loaded assets.
-};
-
-// Actually, let's use a very reliable public CDN for small UI sounds to satisfy "mp3 files" request.
 const SOUND_URLS = {
-    step: 'https://assets.mixkit.co/active_storage/sfx/2571/2571-preview.mp3', // Light footstep
-    hit: 'https://assets.mixkit.co/active_storage/sfx/2151/2151-preview.mp3', // Punch/Impact
-    collect: 'https://assets.mixkit.co/active_storage/sfx/2019/2019-preview.mp3', // Coin/Gem
-    craft: 'https://assets.mixkit.co/active_storage/sfx/2558/2558-preview.mp3', // Construction/Hit
+    step: 'https://assets.mixkit.co/active_storage/sfx/2571/2571-preview.mp3',
+    hit: 'https://assets.mixkit.co/active_storage/sfx/2151/2151-preview.mp3',
+    collect: 'https://assets.mixkit.co/active_storage/sfx/2019/2019-preview.mp3',
+    craft: 'https://assets.mixkit.co/active_storage/sfx/2558/2558-preview.mp3',
+    // Ambience
+    [BiomeType.FOREST]: 'https://assets.mixkit.co/active_storage/sfx/1218/1218-preview.mp3', // Birds/Nature
+    [BiomeType.DESERT]: 'https://assets.mixkit.co/active_storage/sfx/1460/1460-preview.mp3', // Wind
+    [BiomeType.ALPINE]: 'https://assets.mixkit.co/active_storage/sfx/1392/1392-preview.mp3', // Cold Wind
 };
 
 class SoundManager {
     private sounds: Record<string, Howl> = {};
     private initialized = false;
     private loadedCount = 0;
-    private totalSounds = 4;
+    private totalSounds = 7;
+    private currentAmbience: Howl | null = null;
+    private currentAmbienceKey: string | null = null;
 
     async init(): Promise<void> {
         if (this.initialized) return;
@@ -42,38 +32,25 @@ class SoundManager {
                 }
             };
 
-            // Preload all sounds
+            const commonOptions = {
+                onload: checkLoad,
+                onloaderror: checkLoad
+            };
+
             this.sounds = {
-                step: new Howl({ 
-                    src: [SOUND_URLS.step], 
-                    volume: 0.2, 
-                    rate: 1.5, // Faster step sound
-                    onload: checkLoad,
-                    onloaderror: checkLoad // Proceed even if fail
-                }),
-                hit: new Howl({ 
-                    src: [SOUND_URLS.hit], 
-                    volume: 0.4, 
-                    onload: checkLoad,
-                    onloaderror: checkLoad 
-                }),
-                collect: new Howl({ 
-                    src: [SOUND_URLS.collect], 
-                    volume: 0.3, 
-                    onload: checkLoad,
-                    onloaderror: checkLoad 
-                }),
-                craft: new Howl({ 
-                    src: [SOUND_URLS.craft], 
-                    volume: 0.5, 
-                    onload: checkLoad,
-                    onloaderror: checkLoad 
-                }),
+                step: new Howl({ src: [SOUND_URLS.step], volume: 0.2, rate: 1.5, ...commonOptions }),
+                hit: new Howl({ src: [SOUND_URLS.hit], volume: 0.4, ...commonOptions }),
+                collect: new Howl({ src: [SOUND_URLS.collect], volume: 0.3, ...commonOptions }),
+                craft: new Howl({ src: [SOUND_URLS.craft], volume: 0.5, ...commonOptions }),
+                
+                // Ambience Tracks
+                [BiomeType.FOREST]: new Howl({ src: [SOUND_URLS[BiomeType.FOREST]], volume: 0.1, loop: true, ...commonOptions }),
+                [BiomeType.DESERT]: new Howl({ src: [SOUND_URLS[BiomeType.DESERT]], volume: 0.15, loop: true, ...commonOptions }),
+                [BiomeType.ALPINE]: new Howl({ src: [SOUND_URLS[BiomeType.ALPINE]], volume: 0.2, loop: true, ...commonOptions }),
             };
         });
     }
 
-    // Call this on user interaction to unlock AudioContext
     resume() {
         if (Howler.ctx.state === 'suspended') {
             Howler.ctx.resume();
@@ -94,6 +71,41 @@ class SoundManager {
         }
         
         this.sounds[key].play();
+    }
+
+    playAmbience(biome: BiomeType) {
+        if (this.currentAmbienceKey === biome) return;
+
+        // Fade out current if different
+        if (this.currentAmbience) {
+            const old = this.currentAmbience;
+            old.fade(old.volume(), 0, 1000);
+            setTimeout(() => old.stop(), 1000);
+        }
+
+        // Play new
+        const sound = this.sounds[biome];
+        if (sound) {
+            this.currentAmbience = sound;
+            this.currentAmbienceKey = biome;
+            sound.volume(0);
+            sound.play();
+            sound.fade(0, biome === BiomeType.ALPINE ? 0.2 : 0.1, 2000); // Fade in
+        }
+    }
+
+    stopAmbience() {
+        if (this.currentAmbience) {
+            const old = this.currentAmbience;
+            old.fade(old.volume(), 0, 1000);
+            setTimeout(() => {
+                old.stop();
+                if (this.currentAmbience === old) {
+                    this.currentAmbience = null;
+                    this.currentAmbienceKey = null;
+                }
+            }, 1000);
+        }
     }
 }
 

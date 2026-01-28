@@ -9,9 +9,11 @@ interface Node {
   parent: Node | null;
 }
 
-// Heuristic: Manhattan distance
+// Heuristic: Octile distance for diagonal movement
 const heuristic = (a: Position, b: Position) => {
-  return Math.abs(a.x - b.x) + Math.abs(a.z - b.z);
+  const dx = Math.abs(a.x - b.x);
+  const dy = Math.abs(a.z - b.z);
+  return (dx + dy) + (Math.SQRT2 - 2) * Math.min(dx, dy);
 };
 
 export const findPath = (
@@ -67,12 +69,19 @@ export const findPath = (
 
     closedList[currentNode.y][currentNode.x] = true;
 
+    // 8-direction neighbors
     const neighbors = [
-      { x: 0, y: -1 }, // Up
-      { x: 0, y: 1 },  // Down
-      { x: -1, y: 0 }, // Left
-      { x: 1, y: 0 },  // Right
+      { x: 0, y: -1, cost: 1 },    // Up
+      { x: 0, y: 1, cost: 1 },     // Down
+      { x: -1, y: 0, cost: 1 },    // Left
+      { x: 1, y: 0, cost: 1 },     // Right
+      { x: -1, y: -1, cost: 1.4 }, // Top-Left
+      { x: 1, y: -1, cost: 1.4 },  // Top-Right
+      { x: -1, y: 1, cost: 1.4 },  // Bottom-Left
+      { x: 1, y: 1, cost: 1.4 },   // Bottom-Right
     ];
+
+    const currentHeight = grid[currentNode.y][currentNode.x].height;
 
     for (const offset of neighbors) {
       const neighborX = currentNode.x + offset.x;
@@ -84,7 +93,19 @@ export const findPath = (
       // Check walkability
       if (!grid[neighborY][neighborX].walkable || closedList[neighborY][neighborX]) continue;
 
-      const gScore = currentNode.g + 1;
+      // Check Height Difference (Steepness check)
+      // Allow moving down freely, but moving up is restricted
+      const neighborHeight = grid[neighborY][neighborX].height;
+      const heightDiff = neighborHeight - currentHeight;
+      
+      // If cliff is too steep (approx > 0.6 units), path is blocked
+      // Most tiles steps are around 0.25 to 0.5
+      if (heightDiff > 0.8) continue; 
+
+      // Add cost for height difference to prefer flat paths
+      const heightCost = Math.max(0, heightDiff * 2);
+
+      const gScore = currentNode.g + offset.cost + heightCost;
       let neighborNode = openList.find(n => n.x === neighborX && n.y === neighborY);
 
       if (!neighborNode) {
