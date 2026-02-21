@@ -6,17 +6,16 @@ const SOUND_URLS = {
     hit: 'https://assets.mixkit.co/active_storage/sfx/2151/2151-preview.mp3',
     collect: 'https://assets.mixkit.co/active_storage/sfx/2019/2019-preview.mp3',
     craft: 'https://assets.mixkit.co/active_storage/sfx/2558/2558-preview.mp3',
+    breakdown: 'https://assets.mixkit.co/active_storage/sfx/2570/2570-preview.mp3', // Engine sputtering
     // Ambience
     [BiomeType.FOREST]: 'https://assets.mixkit.co/active_storage/sfx/1218/1218-preview.mp3', // Birds/Nature
-    [BiomeType.DESERT]: 'https://assets.mixkit.co/active_storage/sfx/1460/1460-preview.mp3', // Wind
-    [BiomeType.ALPINE]: 'https://assets.mixkit.co/active_storage/sfx/1392/1392-preview.mp3', // Cold Wind
 };
 
 class SoundManager {
     private sounds: Record<string, Howl> = {};
     private initialized = false;
     private loadedCount = 0;
-    private totalSounds = 7;
+    private totalSounds = 6;
     private currentAmbience: Howl | null = null;
     private currentAmbienceKey: string | null = null;
 
@@ -42,11 +41,10 @@ class SoundManager {
                 hit: new Howl({ src: [SOUND_URLS.hit], volume: 0.4, ...commonOptions }),
                 collect: new Howl({ src: [SOUND_URLS.collect], volume: 0.3, ...commonOptions }),
                 craft: new Howl({ src: [SOUND_URLS.craft], volume: 0.5, ...commonOptions }),
+                breakdown: new Howl({ src: [SOUND_URLS.breakdown], volume: 0.6, ...commonOptions }),
                 
                 // Ambience Tracks
                 [BiomeType.FOREST]: new Howl({ src: [SOUND_URLS[BiomeType.FOREST]], volume: 0.1, loop: true, ...commonOptions }),
-                [BiomeType.DESERT]: new Howl({ src: [SOUND_URLS[BiomeType.DESERT]], volume: 0.15, loop: true, ...commonOptions }),
-                [BiomeType.ALPINE]: new Howl({ src: [SOUND_URLS[BiomeType.ALPINE]], volume: 0.2, loop: true, ...commonOptions }),
             };
         });
     }
@@ -55,6 +53,10 @@ class SoundManager {
         if (Howler.ctx.state === 'suspended') {
             Howler.ctx.resume();
         }
+    }
+
+    setVolume(volume: number) {
+        Howler.volume(Math.max(0, Math.min(1, volume)));
     }
 
     play(key: string) {
@@ -90,7 +92,7 @@ class SoundManager {
             this.currentAmbienceKey = biome;
             sound.volume(0);
             sound.play();
-            sound.fade(0, biome === BiomeType.ALPINE ? 0.2 : 0.1, 2000); // Fade in
+            sound.fade(0, 0.1, 2000); // Fade in
         }
     }
 

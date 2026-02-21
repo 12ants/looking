@@ -1,202 +1,162 @@
+
 import { GridNode, TileType, WorldItem, ItemType, Position, BiomeType, Enemy, EnemyType, NPC } from '../types';
-import { DEFAULT_GRID_SIZE, HOUSE_COUNT, TREE_COUNT, ITEM_COUNT, ENEMY_COUNT, ENEMY_CONFIG } from '../constants';
+import { DEFAULT_GRID_SIZE, ITEM_COUNT, ENEMY_CONFIG } from '../constants';
 
-const SAFE_ZONE_RADIUS = 35; // No enemies within this distance of origin
+const SAFE_ZONE_RADIUS = 35; 
 
-const randomInt = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
+// --- Improved Noise Functions (Value Noise) ---
 
-// Deterministic pseudo-random based on coordinates and seed
+const fract = (x: number) => x - Math.floor(x);
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const smooth = (t: number) => t * t * (3 - 2 * t);
+
+const hash = (x: number, z: number, seed: number) => {
+    const n = Math.sin(x * 127.1 + z * 311.7 + seed) * 43758.5453123;
+    return n - Math.floor(n);
+};
+
+const noise2D = (x: number, z: number, seed: number) => {
+    const i_x = Math.floor(x);
+    const i_z = Math.floor(z);
+    const f_x = fract(x);
+    const f_z = fract(z);
+    const u = smooth(f_x);
+    const v = smooth(f_z);
+    const n00 = hash(i_x, i_z, seed);
+    const n10 = hash(i_x + 1, i_z, seed);
+    const n01 = hash(i_x, i_z + 1, seed);
+    const n11 = hash(i_x + 1, i_z + 1, seed);
+    return lerp(lerp(n00, n10, u), lerp(n01, n11, u), v) * 2.0 - 1.0;
+};
+
+const fbm = (x: number, z: number, seed: number, octaves: number, persistence: number = 0.5, lacunarity: number = 2.0) => {
+    let total = 0;
+    let frequency = 1;
+    let amplitude = 1;
+    let maxValue = 0;  
+    for(let i=0; i < octaves; i++) {
+        total += noise2D(x * frequency, z * frequency, seed) * amplitude;
+        maxValue += amplitude;
+        amplitude *= persistence;
+        frequency *= lacunarity;
+    }
+    return total / maxValue;
+};
+
 const randomAt = (x: number, z: number, seed: number) => {
-    const sin = Math.sin(x * 12.9898 + z * 78.233 + seed) * 43758.5453;
-    return sin - Math.floor(sin);
-};
-
-// Smooth noise function
-const noise = (x: number, z: number, seed: number) => {
-  return Math.sin(x * 0.1 + seed) * Math.cos(z * 0.1 + seed) + Math.sin(x * 0.03 + z * 0.03) * 0.5;
-};
-
-// River Noise (Ridged Multifractal-ish)
-const riverNoise = (x: number, z: number, seed: number) => {
-    // Create 'valleys' by taking absolute value of sine waves
-    const n = Math.abs(Math.sin(x * 0.04 + seed) + Math.cos(z * 0.04 + seed * 0.5));
-    // Invert so 0 is the center of the river
-    return n; 
-};
-
-// Road noise for infinite roads
-const roadNoise = (x: number, z: number, seed: number) => {
-    // Winding roads
-    return Math.abs(Math.sin(x * 0.03 + seed * 0.5) + Math.sin(z * 0.04 + seed));
-};
-
-// Town density noise (Low frequency)
-const townNoise = (x: number, z: number, seed: number) => {
-    return Math.sin(x * 0.02 + seed) + Math.cos(z * 0.02 + seed * 1.5);
+    return hash(x, z, seed);
 };
 
 export const generateTile = (x: number, z: number, seed: number, biome: BiomeType): GridNode => {
-    const rawH = noise(x, z, seed);
-    let type: TileType = TileType.GRASS;
-    let baseTile = TileType.GRASS;
-    let waterLevel = -0.3;
-    let heightScale = 1.0;
-    
-    // Biome Settings
-    if (biome === BiomeType.DESERT) {
-        baseTile = TileType.SAND;
-        heightScale = 0.8;
-    } else if (biome === BiomeType.ALPINE) {
-        heightScale = 2.5;
-    } else { // Forest
-        heightScale = 1.5;
-    }
+    let h = fbm(x * 0.02, z * 0.02, seed, 4); 
+    const mountainNoise = fbm(x * 0.05, z * 0.05, seed + 100, 3);
+    if (mountainNoise > 0.4) h += (mountainNoise - 0.4) * 3.0;
 
-    // --- Heightmap & Terracing ---
-    const stepSize = 0.4;
-    let smoothHeight = Math.max(0, rawH * heightScale);
-    let terracedHeight = Math.floor(smoothHeight / stepSize) * stepSize;
-    // Blend smooth and terrace for "eroded" look
-    let height = (terracedHeight * 0.7) + (smoothHeight * 0.3);
-
-    // --- Town Clusters ---
-    // Values > 0.5 are "town centers", < -0.5 are "wilderness"
-    const tVal = townNoise(x, z, seed + 999);
-    const isTown = tVal > 0.5;
-    const isWilderness = tVal < -0.5;
-
-    // --- Rivers ---
-    const rVal = riverNoise(x, z, seed + 100);
-    const riverThreshold = 0.12; // Narrower rivers
+    const riverBase = fbm(x * 0.015, z * 0.015, seed + 200, 2);
+    const riverLine = Math.abs(riverBase);
+    const riverWidth = 0.08;
     let isRiver = false;
-
-    if (rVal < riverThreshold && height < 1.2) {
-        isRiver = true;
-        height = -0.2; 
+    if (riverLine < riverWidth) {
+        const depth = (riverWidth - riverLine) / riverWidth;
+        h -= depth * 2.5;
+        if (h < -0.8) isRiver = true;
     }
 
-    // --- Tile Type Assignment ---
-    type = baseTile;
-
-    if (isRiver) {
-        type = TileType.WATER;
-    } else if (height <= 0 && biome !== BiomeType.DESERT) {
-        if (rawH < waterLevel) {
-            type = TileType.WATER;
-            height = -0.2;
-        } else {
-             type = TileType.SAND;
-        }
-    } else if (biome === BiomeType.ALPINE) {
-        if (height > 1.2) type = TileType.SNOW;
-        else if (height > 0.6) type = TileType.ROCK;
-    } else if (biome === BiomeType.FOREST) {
-        if (height > 1.0) type = TileType.ROCK;
-    } else if (biome === BiomeType.DESERT) {
-        if (height > 0.8) type = TileType.ROCK;
-    }
-
-    // --- Roads & Bridges ---
-    const roadVal = roadNoise(x, z, seed + 50);
-    let isRoad = false;
-    let decoration = null;
+    const stepSize = 0.6;
+    let finalHeight = Math.floor(h / stepSize) * stepSize;
     
-    // Roads are more common in towns, less common in wilderness
-    const roadThreshold = isTown ? 0.18 : (isWilderness ? 0.08 : 0.12);
-
-    // Check road generation
-    if (roadVal < roadThreshold) {
-        // If it overlaps a river, it's a bridge
-        if (isRiver) {
-            type = TileType.ROAD;
-            height = 0.2; // Bridge height
-            decoration = 'bridge';
-            isRoad = true;
-        } 
-        // Normal road (avoid mountains/water unless bridge)
-        else if (type !== TileType.WATER && type !== TileType.ROCK && type !== TileType.SNOW) {
-            type = TileType.ROAD;
-            height = Math.max(0.1, Math.floor(height * 2)/2); // Flatten
-            isRoad = true;
-        }
-    }
-
-    // --- Objects & Decoration ---
-    // Make mostly everything traversible except water and buildings
-    let walkable = type !== TileType.WATER; 
+    let type = TileType.GRASS;
+    let decoration = null;
     let decorationActive = false;
+    let walkable = true;
     let style = 0;
     let rotation = 0;
+    
+    if (isRiver) {
+        type = TileType.WATER;
+        walkable = false;
+        finalHeight = -1.0;
+    } else if (finalHeight < -0.5) {
+        type = TileType.SAND;
+    } else if (finalHeight > 1.8) {
+        type = TileType.ROCK;
+        if (finalHeight > 2.8) type = TileType.SNOW;
+    }
+
+    const townVal = noise2D(x * 0.02, z * 0.02, seed + 500);
+    const isTown = townVal > 0.35 && type !== TileType.WATER && type !== TileType.ROCK && type !== TileType.SNOW;
+    const isTownEdge = townVal > 0.25 && townVal <= 0.35;
+
+    if (isTown || isTownEdge) {
+        if (type !== TileType.WATER) {
+            finalHeight = Math.max(0, Math.floor(finalHeight));
+            if (type === TileType.ROCK) type = TileType.GRASS;
+        }
+    }
+
+    const roadNoise = Math.abs(noise2D(x * 0.03, z * 0.03, seed + 600));
+    let isRoad = false;
+    if (isTown) {
+        const gridX = Math.abs(Math.round(x)) % 6 === 0;
+        const gridZ = Math.abs(Math.round(z)) % 6 === 0;
+        if (gridX || gridZ) isRoad = true;
+    } else {
+        if (roadNoise < 0.06 && type !== TileType.WATER && type !== TileType.ROCK) isRoad = true;
+    }
+
+    if (type === TileType.WATER && roadNoise < 0.06) {
+        type = TileType.ROAD;
+        decoration = 'bridge';
+        finalHeight = -0.4;
+        walkable = true;
+        isRoad = true;
+    } else if (isRoad) {
+        type = isTown ? TileType.ROAD : TileType.PATH;
+        walkable = true;
+    }
 
     const rng = randomAt(x, z, seed);
     const rng2 = randomAt(x, z, seed + 1);
-
-    // Vegetation Clusters
-    const vegNoise = noise(x * 0.5, z * 0.5, seed + 200);
-
-    // Caves (In Rock walls)
-    if (type === TileType.ROCK && !decoration) {
-        // Rare chance for cave
-        if (rng > 0.96) {
-             decoration = 'cave';
-             rotation = Math.floor(rng2 * 4) * (Math.PI / 2);
-        }
-    }
+    const hasSpace = (x % 2 !== 0 || z % 2 !== 0); 
 
     if (walkable && !isRoad && !decoration) {
-        // Houses (Clustered in Towns)
-        const houseChance = isTown ? 0.15 : 0.005; // High chance in town, very low in wild
-        
-        if (type === baseTile && height < 0.8 && rng < houseChance) {
-            type = TileType.HOUSE;
-            walkable = false; // Houses block movement
-            style = biome === BiomeType.DESERT ? 2 : (Math.floor(rng2 * 2)); // 0 or 1 for forest/alpine
-            decorationActive = false;
-            rotation = Math.floor(rng2 * 4) * (Math.PI / 2);
-        }
-        // Trees
-        else if (vegNoise > 0.2 && rng > (isTown ? 0.8 : 0.4)) { // Fewer trees in town centers
-            type = TileType.TREE;
-            // Walkable stays true
-            style = biome === BiomeType.DESERT ? 2 : (biome === BiomeType.ALPINE ? 1 : 0);
-            rotation = rng * Math.PI * 2;
-        }
-        // Bushes
-        else if (vegNoise > 0.3 && rng > 0.4) {
-            type = TileType.BUSH;
-            // Walkable stays true
-            rotation = rng * Math.PI * 2;
-        }
-        // Fences (Near houses or roads ideally)
-        else if (isTown && rng > 0.85) {
-            decoration = 'fence';
-            rotation = (rng2 > 0.5) ? 0 : Math.PI / 2;
-            walkable = false; // Fences still block
-        }
-        // Flowers
-        else if (type === TileType.GRASS && rng < 0.08) {
-            decoration = 'flower';
-            rotation = rng2 * Math.PI;
-        }
-        // Lamps (Only in towns, near roads)
-        else if (isTown && rng < 0.05) {
-            decoration = 'lamp';
-            decorationActive = true;
-            walkable = false; // Lamps block
+        if (isTown && hasSpace) {
+            const houseDensity = hash(Math.floor(x/2), Math.floor(z/2), seed + 700);
+            if (houseDensity > 0.4) {
+                type = TileType.HOUSE;
+                walkable = false;
+                style = Math.floor(rng * 3);
+                rotation = Math.floor(rng2 * 4) * (Math.PI / 2);
+            } else if (houseDensity > 0.2) {
+                if (rng > 0.8) { decoration = 'fence'; walkable = false; rotation = (rng2 > 0.5) ? 0 : Math.PI/2; }
+                else if (rng > 0.7) { decoration = 'barrel'; walkable = false; }
+                else if (rng > 0.65) { decoration = 'crate'; walkable = false; }
+                else if (rng < 0.05) { decoration = 'lamp'; decorationActive = true; walkable = false; }
+            }
+        } else if (!isTown) {
+            const forestNoise = fbm(x * 0.08, z * 0.08, seed + 800, 2);
+            if (forestNoise > 0.2 && rng > 0.9 && type === TileType.GRASS) {
+                const spacing = (x % 3 === 0 || z % 3 === 0);
+                if (spacing) {
+                    type = TileType.TREE;
+                    style = forestNoise > 0.5 ? 1 : 0;
+                    rotation = rng * Math.PI * 2;
+                }
+            } else if (type === TileType.SAND && rng > 0.9) decoration = 'pebble';
+            else if (type === TileType.GRASS && rng < 0.02) decoration = 'flower';
+            else if (type === TileType.GRASS && rng > 0.98) type = TileType.BUSH;
         }
     }
 
-    return {
-        x,
-        y: z,
-        walkable,
-        type,
-        height,
-        style,
-        decoration,
-        decorationActive,
-        rotation
-    };
+    if (type === TileType.ROCK && !decoration) {
+        const caveN = noise2D(x * 0.1, z * 0.1, seed + 900);
+        if (finalHeight > 1.2 && caveN > 0.6 && rng > 0.92) {
+            decoration = 'cave';
+            rotation = Math.floor(rng2 * 4) * (Math.PI/2);
+        }
+    }
+
+    return { x, y: z, walkable, type, height: finalHeight, style, decoration, decorationActive, rotation };
 };
 
 const getDifficulty = (x: number, z: number) => {
@@ -206,46 +166,54 @@ const getDifficulty = (x: number, z: number) => {
 
 const spawnItemAt = (x: number, z: number, seed: number, biome: BiomeType): ItemType | null => {
     const rng = randomAt(x, z, seed);
-    
-    // Significantly reduced spawn rate (Scarce resources)
-    if (rng > 0.985) { // Was 0.96
+    if (rng > 0.985) { 
         const typeRng = randomAt(x, z, seed + 1);
-        
-        if (typeRng > 0.96) return ItemType.POTION;
-        if (typeRng > 0.93) return ItemType.SWORD;
-        if (typeRng > 0.90) return ItemType.GEM;
-
-        if (biome === BiomeType.DESERT) {
-            if (typeRng > 0.6) return ItemType.GOLD;
-            if (typeRng > 0.4) return ItemType.IRON_ORE;
-            return ItemType.STONE;
-        } 
-        else if (biome === BiomeType.ALPINE) {
-            if (typeRng > 0.6) return ItemType.IRON_ORE;
-            if (typeRng > 0.4) return ItemType.COAL;
-            if (typeRng > 0.2) return ItemType.GEM;
-            return ItemType.STONE;
-        } 
-        else { // FOREST
-            if (typeRng > 0.8) return ItemType.COAL;
-            if (typeRng > 0.6) return ItemType.BERRY;
-            return ItemType.WOOD;
-        }
+        if (typeRng > 0.97) return ItemType.POTION;
+        if (typeRng > 0.95) return ItemType.SWORD;
+        if (typeRng > 0.93) return ItemType.GEM;
+        if (typeRng > 0.88) return ItemType.GOLD;
+        if (typeRng > 0.80) return ItemType.IRON_ORE;
+        if (typeRng > 0.72) return ItemType.COAL;
+        if (typeRng > 0.64) return ItemType.STONE;
+        if (typeRng > 0.55) return ItemType.BERRY;
+        return ItemType.WOOD;
     }
     return null;
 }
 
-export const generateWorld = (originX: number = 0, originZ: number = 0, inputSeed?: number, inputBiome?: BiomeType, gridSize: number = DEFAULT_GRID_SIZE): { grid: GridNode[][]; items: WorldItem[]; enemies: Enemy[]; npcs: NPC[]; startPos: Position; biome: BiomeType; seed: number } => {
-  const seed = inputSeed || Math.random() * 100;
-  
-  let biome = inputBiome;
-  if (!biome) {
-      const biomeRoll = randomAt(0, 0, seed);
-      if (biomeRoll < 0.33) biome = BiomeType.DESERT;
-      else if (biomeRoll < 0.66) biome = BiomeType.ALPINE;
-      else biome = BiomeType.FOREST;
-  }
+export const trySpawnEnemy = (worldX: number, worldZ: number, seed: number): Enemy | null => {
+    const difficulty = getDifficulty(worldX, worldZ);
+    const distFromCenter = Math.sqrt(worldX*worldX + worldZ*worldZ);
+    if (distFromCenter > SAFE_ZONE_RADIUS) {
+        const rng = randomAt(worldX, worldZ, seed + 1);
+        if (rng < (0.005 + difficulty * 0.03)) {
+           let enemyType = EnemyType.SLIME;
+           const typeRoll = randomAt(worldX, worldZ, seed + 3);
+           if (difficulty > 0.6 && typeRoll > 0.7) enemyType = EnemyType.GOLEM;
+           else if (difficulty > 0.3 && typeRoll > 0.6) enemyType = EnemyType.GHOST;
+           const config = ENEMY_CONFIG[enemyType];
+           return { id: `enemy-${worldX}-${worldZ}`, type: enemyType, position: { x: worldX, z: worldZ }, hp: config.hp, maxHp: config.hp, attack: config.attack, dead: false };
+        }
+    }
+    return null;
+};
 
+export const spawnEnemiesForGrid = (grid: GridNode[][], seed: number): Enemy[] => {
+    const newEnemies: Enemy[] = [];
+    grid.forEach(row => {
+        row.forEach(tile => {
+            if (tile.walkable && !tile.decoration && tile.type !== TileType.ROAD && tile.type !== TileType.PATH) {
+                const enemy = trySpawnEnemy(tile.x, tile.y, seed);
+                if (enemy) newEnemies.push(enemy);
+            }
+        });
+    });
+    return newEnemies;
+};
+
+export const generateWorld = (originX: number = 0, originZ: number = 0, inputSeed?: number, inputBiome?: BiomeType, gridSize: number = DEFAULT_GRID_SIZE, spawnEnemies: boolean = false): { grid: GridNode[][]; items: WorldItem[]; enemies: Enemy[]; npcs: NPC[]; startPos: Position; biome: BiomeType; seed: number } => {
+  const seed = inputSeed || Math.random() * 100;
+  const biome = BiomeType.FOREST;
   const grid: GridNode[][] = [];
   const items: WorldItem[] = [];
   const enemies: Enemy[] = [];
@@ -253,16 +221,12 @@ export const generateWorld = (originX: number = 0, originZ: number = 0, inputSee
 
   for (let z = 0; z < gridSize; z++) {
     const row: GridNode[] = [];
-    for (let x = 0; x < gridSize; x++) {
-        row.push(generateTile(originX + x, originZ + z, seed, biome));
-    }
+    for (let x = 0; x < gridSize; x++) row.push(generateTile(originX + x, originZ + z, seed, biome));
     grid.push(row);
   }
 
-  // Populate Items/Enemies/NPCs
   let itemCount = 0;
   let mcGregorSpawned = false;
-  let sonsWatchSpawned = false;
 
   for (let z = 0; z < gridSize; z++) {
       for (let x = 0; x < gridSize; x++) {
@@ -270,143 +234,138 @@ export const generateWorld = (originX: number = 0, originZ: number = 0, inputSee
           const worldX = tile.x;
           const worldZ = tile.y;
           const difficulty = getDifficulty(worldX, worldZ);
-          const distFromCenter = Math.sqrt(worldX*worldX + worldZ*worldZ);
-
-          if (tile.walkable && !tile.decoration && tile.type !== TileType.ROAD) {
-              // Spawn McGregor near center/spawn (low difficulty), preferably near a house
+          
+          if (tile.walkable && !tile.decoration && tile.type !== TileType.ROAD && tile.type !== TileType.PATH) {
+              // Quest Giver (McGregor) - Essential, spawns near start
               if (!mcGregorSpawned && difficulty < 0.1 && tile.type === TileType.GRASS) {
-                  // Check neighbors for house
-                   const neighbors = [
-                      grid[z+1]?.[x], grid[z-1]?.[x], grid[z]?.[x+1], grid[z]?.[x-1]
-                   ];
+                   const neighbors = [grid[z+1]?.[x], grid[z-1]?.[x], grid[z]?.[x+1], grid[z]?.[x-1]];
+                   // Must be near a house
                    if (neighbors.some(n => n?.type === TileType.HOUSE)) {
-                       npcs.push({
-                           id: 'npc_mcgregor',
-                           name: 'Old Man McGregor',
-                           position: { x: worldX, z: worldZ },
-                           role: 'QUEST_GIVER'
-                       });
+                       npcs.push({ id: 'npc_mcgregor', name: 'Old Man McGregor', position: { x: worldX, z: worldZ }, role: 'QUEST_GIVER' });
                        mcGregorSpawned = true;
                    }
               }
-
-              // Spawn Son's Watch far away (High difficulty)
-              if (!sonsWatchSpawned && difficulty > 0.4 && itemCount < ITEM_COUNT) {
-                   const rng = randomAt(worldX, worldZ, seed + 99);
-                   if (rng > 0.98) {
-                        const id = `item-watch-${worldX}-${worldZ}`;
-                        items.push({ id, type: ItemType.SONS_WATCH, position: { x: worldX, z: worldZ }, collected: false });
-                        tile.itemId = id;
-                        sonsWatchSpawned = true;
-                   }
+              // Generic Villagers - ONLY spawn much further out (Late Game)
+              // difficulty > 0.3 ensures they are far from start
+              else if (tile.type === TileType.GRASS && difficulty > 0.3 && noise2D(worldX, worldZ, seed + 1000) > 0.96) {
+                   npcs.push({ id: `npc_villager_${worldX}_${worldZ}`, name: 'Lost Villager', position: { x: worldX, z: worldZ }, role: 'VILLAGER' });
+              }
+              // Wandering Merchant - VERY RARE and FAR
+              // difficulty > 0.5 ensures deep exploration
+              else if (difficulty > 0.5 && noise2D(worldX, worldZ, seed + 2000) > 0.98) {
+                   npcs.push({ id: `npc_merchant_${worldX}_${worldZ}`, name: 'Wandering Trader', position: { x: worldX, z: worldZ }, role: 'MERCHANT' });
               }
 
               if (itemCount < ITEM_COUNT) {
                  const itemType = spawnItemAt(worldX, worldZ, seed + 2, biome);
                  if (itemType) {
-                    const id = `item-${worldX}-${worldZ}`;
-                    items.push({ id, type: itemType, position: { x: worldX, z: worldZ }, collected: false });
-                    tile.itemId = id;
+                    items.push({ id: `item-${worldX}-${worldZ}`, type: itemType, position: { x: worldX, z: worldZ }, collected: false });
+                    tile.itemId = `item-${worldX}-${worldZ}`;
                     itemCount++;
                  }
               }
-              
-              // Enemy Spawning - SAFE ZONE LOGIC
-              if (distFromCenter > SAFE_ZONE_RADIUS) {
-                  const rng = randomAt(worldX, worldZ, seed + 1);
-                  if (rng < (0.005 + difficulty * 0.03)) {
-                     let enemyType = EnemyType.SLIME;
-                     const typeRoll = randomAt(worldX, worldZ, seed + 3);
-                     if (difficulty > 0.6 && typeRoll > 0.7) enemyType = EnemyType.GOLEM;
-                     else if (difficulty > 0.3 && typeRoll > 0.6) enemyType = EnemyType.GHOST;
-                     const config = ENEMY_CONFIG[enemyType];
-                     enemies.push({ id: `enemy-${worldX}-${worldZ}`, type: enemyType, position: { x: worldX, z: worldZ }, hp: config.hp, maxHp: config.hp, attack: config.attack, dead: false });
-                  }
+              if (spawnEnemies) {
+                  const enemy = trySpawnEnemy(worldX, worldZ, seed);
+                  if (enemy) enemies.push(enemy);
               }
           }
       }
   }
 
-  // Fallback: If McGregor didn't spawn naturally, force spawn him near center
-  if (!mcGregorSpawned) {
-      npcs.push({
-           id: 'npc_mcgregor',
-           name: 'Old Man McGregor',
-           position: { x: originX + Math.floor(gridSize/2) + 2, z: originZ + Math.floor(gridSize/2) },
-           role: 'QUEST_GIVER'
-      });
-  }
+  if (!mcGregorSpawned) npcs.push({ id: 'npc_mcgregor', name: 'Old Man McGregor', position: { x: originX + Math.floor(gridSize/2) + 2, z: originZ + Math.floor(gridSize/2) }, role: 'QUEST_GIVER' });
   
-  // Fallback: Force spawn watch if missed
-  if (!sonsWatchSpawned) {
-       const wX = originX + gridSize - 5;
-       const wZ = originZ + gridSize - 5;
-       const id = `item-watch-force`;
-       items.push({ id, type: ItemType.SONS_WATCH, position: { x: wX, z: wZ }, collected: false });
-  }
-
-  // Find valid start position
   let startPos = { x: originX + Math.floor(gridSize/2), z: originZ + Math.floor(gridSize/2) };
-  let safety = 0;
-  while(safety < 100) {
-      const localX = startPos.x - originX;
-      const localZ = startPos.z - originZ;
-      if (localX >= 0 && localX < gridSize && localZ >= 0 && localZ < gridSize) {
-          if (grid[localZ][localX].walkable && grid[localZ][localX].type !== TileType.WATER) break;
+  let carPlaced = false;
+  const roadTiles = grid.flat().filter(t => t.type === TileType.ROAD || t.type === TileType.PATH);
+  const centerX = originX + gridSize / 2;
+  const centerZ = originZ + gridSize / 2;
+  roadTiles.sort((a, b) => {
+      const distA = Math.sqrt(Math.pow(a.x - centerX, 2) + Math.pow(a.y - centerZ, 2));
+      const distB = Math.sqrt(Math.pow(b.x - centerX, 2) + Math.pow(b.y - centerZ, 2));
+      return distA - distB;
+  });
+
+  const SAFE_RADIUS = 4;
+  for (const road of roadTiles) {
+      const neighbors = [{dx: 1, dy: 0}, {dx: -1, dy: 0}, {dx: 0, dy: 1}, {dx: 0, dy: -1}];
+      for (const n of neighbors) {
+          const cx = (road.x - originX) + n.dx; 
+          const cz = (road.y - originZ) + n.dy; 
+          if (cx >= 0 && cx < gridSize && cz >= 0 && cz < gridSize) {
+              const tile = grid[cz][cx];
+              if (tile.type !== TileType.WATER && tile.type !== TileType.ROAD && tile.type !== TileType.PATH && tile.decoration !== 'bridge' && Math.abs(tile.height - road.height) < 0.8) {
+                  tile.decoration = 'car';
+                  tile.type = TileType.GRASS;
+                  tile.height = road.height; 
+                  tile.walkable = false;
+                  tile.rotation = Math.atan2(-n.dx, -n.dy); 
+                  startPos = { x: road.x, z: road.y };
+                  carPlaced = true;
+                  const clearTargets = [{x: road.x - originX, z: road.y - originZ}, {x: cx, z: cz}];
+                  for (const target of clearTargets) {
+                      for (let dz = -SAFE_RADIUS; dz <= SAFE_RADIUS; dz++) {
+                          for (let dx = -SAFE_RADIUS; dx <= SAFE_RADIUS; dx++) {
+                              const tx = target.x + dx;
+                              const tz = target.z + dz;
+                              if (tx >= 0 && tx < gridSize && tz >= 0 && tz < gridSize) {
+                                  const t = grid[tz][tx];
+                                  if (t.x === tile.x && t.y === tile.y) continue;
+                                  if (t.type === TileType.TREE || t.type === TileType.HOUSE || t.type === TileType.ROCK || t.type === TileType.STUMP || t.type === TileType.BUSH) {
+                                      t.type = TileType.GRASS;
+                                      t.decoration = null;
+                                      t.walkable = true;
+                                      if (Math.abs(t.height - road.height) < 1.0) t.height = road.height; 
+                                  }
+                                  if (t.decoration && t.decoration !== 'bridge') t.decoration = null;
+                              }
+                          }
+                      }
+                  }
+                  break;
+              }
+          }
+          if (carPlaced) break;
       }
-      startPos.x += Math.floor(Math.random()*5)-2;
-      startPos.z += Math.floor(Math.random()*5)-2;
-      safety++;
+      if (carPlaced) break;
   }
   
-  // Fallback if spawn is invalid
-  const localX = startPos.x - originX;
-  const localZ = startPos.z - originZ;
-  if (localX >= 0 && localX < gridSize && localZ >= 0 && localZ < gridSize) {
-      if (!grid[localZ][localX].walkable) {
-          grid[localZ][localX].type = TileType.GRASS;
-          grid[localZ][localX].height = 0.5;
-          grid[localZ][localX].walkable = true;
-      }
+  if (carPlaced) {
+      const minX = startPos.x - SAFE_RADIUS;
+      const maxX = startPos.x + SAFE_RADIUS;
+      const minZ = startPos.z - SAFE_RADIUS;
+      const maxZ = startPos.z + SAFE_RADIUS;
+      const removeInZone = (arr: any[]) => {
+          for (let i = arr.length - 1; i >= 0; i--) {
+              const p = (arr[i].position || arr[i].position);
+              if (p.x >= minX && p.x <= maxX && p.z >= minZ && p.z <= maxZ) arr.splice(i, 1);
+          }
+      };
+      removeInZone(items);
+      removeInZone(enemies);
   }
-
+  
   return { grid, items, enemies, npcs, startPos, biome, seed };
 };
 
-export const generateChunkStrip = (originX: number, originZ: number, width: number, height: number, seed: number, biome: BiomeType) => {
+export const generateChunkStrip = (originX: number, originZ: number, width: number, height: number, seed: number, biome: BiomeType, spawnEnemies: boolean = false) => {
     const nodes: GridNode[] = [];
     const newItems: WorldItem[] = [];
     const newEnemies: Enemy[] = [];
-
     for (let z = 0; z < height; z++) {
         for (let x = 0; x < width; x++) {
             const worldX = originX + x;
             const worldZ = originZ + z;
             const tile = generateTile(worldX, worldZ, seed, biome);
             nodes.push(tile);
-            
-            const difficulty = getDifficulty(worldX, worldZ);
-            const distFromCenter = Math.sqrt(worldX*worldX + worldZ*worldZ);
-
-            if (tile.walkable && !tile.decoration && tile.type !== TileType.ROAD) {
+            if (tile.walkable && !tile.decoration && tile.type !== TileType.ROAD && tile.type !== TileType.PATH) {
                  const itemType = spawnItemAt(worldX, worldZ, seed + 2, biome);
                  if (itemType) {
-                    const id = `item-${worldX}-${worldZ}`;
-                    newItems.push({ id, type: itemType, position: { x: worldX, z: worldZ }, collected: false });
-                    tile.itemId = id;
+                    newItems.push({ id: `item-${worldX}-${worldZ}`, type: itemType, position: { x: worldX, z: worldZ }, collected: false });
+                    tile.itemId = `item-${worldX}-${worldZ}`;
                  }
-                 
-                 // Chunk Enemy Generation - SAFE ZONE LOGIC
-                 if (distFromCenter > SAFE_ZONE_RADIUS) {
-                     const rng = randomAt(worldX, worldZ, seed + 1);
-                     if (rng < (0.005 + difficulty * 0.03)) {
-                        let enemyType = EnemyType.SLIME;
-                        const typeRoll = randomAt(worldX, worldZ, seed + 3);
-                        if (difficulty > 0.6 && typeRoll > 0.7) enemyType = EnemyType.GOLEM;
-                        else if (difficulty > 0.3 && typeRoll > 0.6) enemyType = EnemyType.GHOST;
-                        const config = ENEMY_CONFIG[enemyType];
-                        newEnemies.push({ id: `enemy-${worldX}-${worldZ}`, type: enemyType, position: { x: worldX, z: worldZ }, hp: config.hp, maxHp: config.hp, attack: config.attack, dead: false });
-                     }
+                 if (spawnEnemies) {
+                    const enemy = trySpawnEnemy(worldX, worldZ, seed);
+                    if (enemy) newEnemies.push(enemy);
                  }
             }
         }

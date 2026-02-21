@@ -1,4 +1,6 @@
+
 import React from 'react';
+import { ThreeElements } from '@react-three/fiber';
 
 export enum TileType {
   GRASS = 0,
@@ -11,6 +13,7 @@ export enum TileType {
   SNOW = 7,
   STUMP = 8,
   BUSH = 9,
+  PATH = 10, // Dirt path
 }
 
 export enum ItemType {
@@ -23,19 +26,29 @@ export enum ItemType {
   POTION = 'Potion',
   IRON_ORE = 'Iron Ore',
   COAL = 'Coal',
-  SONS_WATCH = 'Sons Watch', // Quest Item
+  SONS_WATCH = 'Sons Watch', // Side Quest Item
+  POWER_CORE = 'Power Core', // Main Quest Item
+  ENGINE_PART = 'Engine Part', // Main Quest Item
+  FISHING_ROD = 'Fishing Rod',
+  RAW_FISH = 'Raw Fish',
+  OLD_BOOT = 'Old Boot',
+  ANCIENT_COIN = 'Ancient Coin',
 }
 
 export enum BiomeType {
   FOREST = 'Forest',
-  DESERT = 'Desert',
-  ALPINE = 'Alpine',
 }
 
 export enum EnemyType {
   SLIME = 'Slime',
   GHOST = 'Ghost',
   GOLEM = 'Golem',
+}
+
+export enum WeatherType {
+  CLEAR = 'Clear',
+  RAIN = 'Rain',
+  STORM = 'Storm',
 }
 
 export interface Position {
@@ -51,7 +64,7 @@ export interface GridNode {
   height: number;
   itemId?: string; // ID of item on this tile if any
   style?: number; // Variant for houses (0-2) or trees (0-2)
-  decoration?: string | null; // 'lamp', 'fence', 'flower'
+  decoration?: string | null; // 'lamp', 'fence', 'flower', 'barrel', 'crate', 'cave', 'bridge', 'mushroom', 'pebble'
   decorationActive?: boolean; // State for decorations like lamps (on/off), Houses (looted)
   rotation?: number; // Y-axis rotation in radians
 }
@@ -66,6 +79,21 @@ export interface WorldItem {
 export interface InventoryItem {
   type: ItemType;
   count: number;
+}
+
+export interface PlayerConfig {
+  skinColor: string;
+  shirtColor: string;
+  pantsColor: string;
+}
+
+export interface GameSettings {
+  audioVolume: number;
+  shadowsEnabled: boolean;
+  particleQuality: 'LOW' | 'HIGH';
+  daySpeed: number; // New: 0.1 to 2.0
+  enemyDensity: 'LOW' | 'MEDIUM' | 'HIGH'; // New
+  showDebugLog: boolean; // New: Toggle for HUD
 }
 
 export interface Enemy {
@@ -89,8 +117,8 @@ export interface Quest {
   id: string;
   title: string;
   description: string;
-  type: 'COLLECT' | 'KILL' | 'TALK';
-  targetType: ItemType | 'ENEMY' | 'NPC'; // ItemType for collect, 'ENEMY' for kill
+  type: 'COLLECT' | 'KILL' | 'TALK' | 'INTERACT';
+  targetType: string; // Flexible target type (ItemType, 'ENEMY', 'NPC', 'LAMP', 'CAVE', etc.)
   requiredCount: number;
   currentCount: number;
   completed: boolean;
@@ -134,43 +162,82 @@ export interface DialogueState {
   options: DialogueOption[];
 }
 
+export interface LogEntry {
+  id: string;
+  timestamp: string;
+  message: string;
+  type: 'INFO' | 'COMBAT' | 'LOOT' | 'SYSTEM';
+}
+
+export interface Notification {
+  id: string;
+  message: string;
+  subtext?: string;
+  type: 'QUEST' | 'ITEM' | 'INFO' | 'DANGER';
+}
+
+export interface FishingState {
+    status: 'IDLE' | 'CASTING' | 'WAITING' | 'BITE' | 'REELING' | 'CAUGHT' | 'LOST';
+    bobberPos: Position | null;
+    startTime: number;
+    targetZone: number; // 0-100 position of the green bar
+    cursorPos: number; // 0-100 position of the player cursor
+}
+
 export interface GameState {
   grid: GridNode[][];
   worldOrigin: Position; // The world coordinate of grid[0][0]
   items: WorldItem[];
   enemies: Enemy[];
-  npcs: NPC[]; // New NPC array
+  npcs: NPC[]; 
   playerPos: Position;
   playerFacing: Position; // Normalized direction vector
   playerHp: number;
   playerMaxHp: number;
   targetPos: Position | null;
+  pendingTarget: Position | null; // New: For double-click movement verification
   path: Position[];
   isMoving: boolean;
   inventory: InventoryItem[];
   inventoryOpen: boolean;
   craftingOpen: boolean;
+  settingsOpen: boolean; 
+  gameSettings: GameSettings; 
   quests: Quest[];
   questLogOpen: boolean;
-  activeDialogue: DialogueState | null; // New Dialogue State
+  activeDialogue: DialogueState | null; 
+  activeThought: string | null; // New: Player internal monologue
   interactionCount: number;
   biome: BiomeType;
   harvestTarget: Position | null;
   combatTargetId: string | null;
   particles: Particle[];
   shakeIntensity: number;
-  damageFlash: number; // Opacity 0-1
+  damageFlash: number; 
   timeOfDay: number; // 0 to 24
   seed: number;
-  storyStage: number; // 0: Start, 1: Quest Given, 2: Item Found, 3: Completed
+  storyStage: number; 
+  logs: LogEntry[]; 
+  notification: Notification | null; // New: Visual Toast Indicator
+  gameWon: boolean; // New: Win state
+  fishing: FishingState; // New: Fishing mechanics
+  weather: WeatherType; // New: Dynamic weather
+  weatherIntensity: number; // 0 to 1 for lerping effects
 }
 
-// Global declaration to extend JSX Intrinsic Elements with React Three Fiber types
+// Global declaration to extend JSX Intrinsic Elements with React Three Fiber types.
+// Merging into both global JSX and React.JSX to cover standard and react-jsx transform environments.
 declare global {
   namespace JSX {
-    interface IntrinsicElements {
-      // Catch-all for React Three Fiber elements to prevent type errors
+    interface IntrinsicElements extends ThreeElements {
       [elemName: string]: any;
+    }
+  }
+  namespace React {
+    namespace JSX {
+      interface IntrinsicElements extends ThreeElements {
+        [elemName: string]: any;
+      }
     }
   }
 }

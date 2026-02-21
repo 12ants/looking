@@ -23,17 +23,22 @@ export const findPath = (
 ): Position[] => {
   const rows = grid.length;
   const cols = grid[0].length;
+  
+  const sX = Math.round(start.x);
+  const sZ = Math.round(start.z);
+  const eX = Math.round(end.x);
+  const eZ = Math.round(end.z);
 
   // Validate bounds
   if (
-    start.x < 0 || start.x >= cols || start.z < 0 || start.z >= rows ||
-    end.x < 0 || end.x >= cols || end.z < 0 || end.z >= rows
+    sX < 0 || sX >= cols || sZ < 0 || sZ >= rows ||
+    eX < 0 || eX >= cols || eZ < 0 || eZ >= rows
   ) {
     return [];
   }
 
   // Ensure target is walkable
-  if (!grid[end.z][end.x].walkable) {
+  if (!grid[eZ][eX].walkable) {
     return []; 
   }
 
@@ -41,8 +46,8 @@ export const findPath = (
   const closedList: boolean[][] = Array(rows).fill(false).map(() => Array(cols).fill(false));
 
   const startNode: Node = {
-    x: start.x,
-    y: start.z,
+    x: sX,
+    y: sZ,
     g: 0,
     h: 0,
     f: 0,
@@ -57,7 +62,7 @@ export const findPath = (
     const currentNode = openList.shift()!;
 
     // Found destination
-    if (currentNode.x === end.x && currentNode.y === end.z) {
+    if (currentNode.x === eX && currentNode.y === eZ) {
       const path: Position[] = [];
       let curr: Node | null = currentNode;
       while (curr) {
@@ -113,7 +118,7 @@ export const findPath = (
           x: neighborX,
           y: neighborY,
           g: gScore,
-          h: heuristic({ x: neighborX, z: neighborY }, end),
+          h: heuristic({ x: neighborX, z: neighborY }, { x: eX, z: eZ }),
           f: 0,
           parent: currentNode,
         };

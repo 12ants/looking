@@ -11,6 +11,12 @@ interface WorldRendererProps {
 const tempObject = new THREE.Object3D();
 const tempColor = new THREE.Color();
 
+// Simple pseudo-random function for color variation
+const randomAt = (x: number, z: number, seed: number = 0) => {
+    const sin = Math.sin(x * 12.9898 + z * 78.233 + seed) * 43758.5453;
+    return sin - Math.floor(sin);
+};
+
 export const WorldRenderer: React.FC<WorldRendererProps> = ({ grid, onTileClick }) => {
   const meshRef = useRef<THREE.InstancedMesh>(null);
 
@@ -32,22 +38,56 @@ export const WorldRenderer: React.FC<WorldRendererProps> = ({ grid, onTileClick 
       tempObject.updateMatrix();
       meshRef.current.setMatrixAt(i, tempObject.matrix);
 
-      // Color Logic
+      // Color Logic with Variation
       let colorHex = COLORS.GRASS;
+      let variation = 0;
+
       switch (tile.type) {
-        case TileType.ROAD: colorHex = COLORS.ROAD; break;
-        case TileType.WATER: colorHex = COLORS.WATER; break;
-        case TileType.SAND: colorHex = tile.height > 0.2 ? COLORS.SAND_DARK : COLORS.SAND; break;
-        case TileType.ROCK: colorHex = COLORS.ROCK; break;
-        case TileType.SNOW: colorHex = COLORS.SNOW; break;
-        case TileType.HOUSE: colorHex = COLORS.ROAD; break; // Foundation
-        case TileType.TREE: colorHex = COLORS.GRASS; break;
-        case TileType.STUMP: colorHex = COLORS.GRASS; break;
-        case TileType.BUSH: colorHex = COLORS.GRASS; break; // Bush sits on grass
-        default: colorHex = tile.height > 0.15 ? COLORS.GRASS_DARK : COLORS.GRASS;
+        case TileType.ROAD: 
+            colorHex = COLORS.ROAD; 
+            // Slight wear on roads
+            variation = randomAt(tile.x, tile.y) * 0.1 - 0.05;
+            break;
+        case TileType.PATH: 
+            colorHex = COLORS.PATH; 
+            variation = randomAt(tile.x, tile.y) * 0.15 - 0.07;
+            break;
+        case TileType.WATER: 
+            colorHex = COLORS.WATER; 
+            break;
+        case TileType.SAND: 
+            colorHex = tile.height > 0.2 ? COLORS.SAND_DARK : COLORS.SAND; 
+            variation = randomAt(tile.x, tile.y) * 0.08 - 0.04;
+            break;
+        case TileType.ROCK: 
+            colorHex = COLORS.ROCK; 
+            variation = randomAt(tile.x, tile.y) * 0.15 - 0.075;
+            break;
+        case TileType.SNOW: 
+            colorHex = COLORS.SNOW; 
+            break;
+        case TileType.HOUSE: 
+            colorHex = COLORS.ROAD; // Foundation
+            break; 
+        case TileType.TREE: 
+        case TileType.STUMP: 
+        case TileType.BUSH: 
+            // Vegetation sits on grass usually
+            colorHex = tile.height > 0.15 ? COLORS.GRASS_DARK : COLORS.GRASS;
+            variation = randomAt(tile.x, tile.y) * 0.1 - 0.05;
+            break;
+        default: 
+            colorHex = tile.height > 0.15 ? COLORS.GRASS_DARK : COLORS.GRASS;
+            variation = randomAt(tile.x, tile.y) * 0.1 - 0.05;
       }
       
       tempColor.set(colorHex);
+      
+      // Apply variation (shift lightness)
+      if (variation !== 0) {
+          tempColor.offsetHSL(0, 0, variation);
+      }
+
       meshRef.current.setColorAt(i, tempColor);
       
       i++;
